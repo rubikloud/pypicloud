@@ -19,12 +19,14 @@ class ICache(object):
 
     package_class = Package
 
-    def __init__(self, request=None, storage=None, allow_overwrite=None):
+    def __init__(self, request=None, storage=None, reload_interval=None, allow_overwrite=None):
         self.request = request
         self.storage = storage(request)
         self.allow_overwrite = allow_overwrite
+        self.reload_interval = reload_interval
+        self.last_reloaded = datetime(year=1970, month=1, day=1)
 
-    def reload_if_needed(self):
+    def reload_if_empty(self):
         """
         Reload packages from storage backend if cache is empty
 
@@ -36,6 +38,17 @@ class ICache(object):
             self.reload_from_storage()
             LOG.info("Cache repopulated")
 
+    def reload_if_needed(self):
+        """
+        Reload packages from storage backend if reload_interval was set and
+        has been exceeded.
+        """
+        if self.reload_interval and\
+                (datetime.now() - self.last_reloaded).seconds > self.reload_interval:
+            LOG.info("Cache is expired. Rebuilding from storage backend...")
+            self.reload_from_storage()
+            LOG.info("Cache repopulated")
+
     @classmethod
     def configure(cls, settings):
         """ Configure the cache method with app settings """
@@ -43,6 +56,7 @@ class ICache(object):
             'storage': get_storage_impl(settings),
             'allow_overwrite': asbool(settings.get('pypi.allow_overwrite',
                                                    False)),
+            'reload_interval': int(settings.get('pypi.reload_interval', None))
         }
 
     def get_url(self, package):
@@ -70,6 +84,7 @@ class ICache(object):
         packages = self.storage.list(self.package_class)
         for pkg in packages:
             self.save(pkg)
+        self.last_reloaded = datetime.now()
 
     def upload(self, filename, data, name=None, version=None, summary=None):
         """
@@ -192,6 +207,7 @@ class ICache(object):
             Type of query to perform. By default, pip sends "or".
 
         """
+        self.reload_if_needed()
         name_queries = criteria.get('name', [])
         summary_queries = criteria.get('summary', [])
         packages = []
@@ -228,6 +244,7 @@ class ICache(object):
             'unstable', and 'last_modified'.
 
         """
+        self.reload_if_needed()
         packages = []
         for name in self.distinct():
             pkg = {
